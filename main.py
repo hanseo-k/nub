@@ -56,11 +56,29 @@ def process_die(xml_path):
     }
 
 
-# ── 플롯 작업 래퍼 (multiprocessing 전달용 최상위 함수) ──────────────
-def _run_wafer_map(args): wafer_map.plot_all(*args)
-def _run_plot_1d(args):   plot_1d.plot_all(*args)
-def _run_plot_mad(args):  plot_1d_mad.plot_all(*args)
-def _run_trust_map(args): trust_map.plot_all(*args)
+METRICS = [
+    ('ER_dB', 'Extinction Ratio (dB)'),
+    ('IL_dB', 'Insertion Loss (dB)'),
+    ('Vpi_V', 'V_pi (V)'),
+]
+
+# ── 플롯 작업 래퍼 — metric별로 쪼개서 12개 작업으로 (8코어 풀 활용) ──
+def _run_plot(args):
+    """(plot_type, col, label, df, run_dir) → 개별 그래프 1장 생성."""
+    import os
+    plot_type, col, label, df, run_dir = args
+    if plot_type == 'wafer':
+        import wafer_map as _m
+        _m.plot_wafer_map(df, col, label, os.path.join(run_dir, f'wafer_map_{col}.png'))
+    elif plot_type == '1d':
+        import plot_1d as _m
+        _m.plot_1d(df, col, label, os.path.join(run_dir, f'1d_{col}.png'))
+    elif plot_type == '1d_mad':
+        import plot_1d_mad as _m
+        _m.plot_1d_mad(df, col, label, os.path.join(run_dir, f'1d_mad_{col}.png'))
+    elif plot_type == 'trust':
+        import trust_map as _m
+        _m.plot_trust_map(df, col, label, os.path.join(run_dir, f'trust_map_{col}.png'))
 
 
 def main():
@@ -96,18 +114,25 @@ def main():
     print(f'        → {run_dir}')
     export_csv(df, run_dir)
 
-    # 5~7) 플롯 4종 동시 생성 — 코어 하나씩 배정
-    print('[5/7] 플롯 생성 (웨이퍼맵 / 1D / 1D+MAD / 신뢰도맵 — 4코어 동시)...')
+    # 5~7) 플롯 12개 동시 생성 — 8코어 풀 활용
+    print('[5/7] 플롯 생성 (4종 × 3 metric = 12작업, 8코어 병렬)...')
     tasks = [
-        (_run_wafer_map, (df, run_dir)),
-        (_run_plot_1d,   (df, run_dir)),
-        (_run_plot_mad,  (df, run_dir)),
-        (_run_trust_map, (df, run_dir)),
+        ('wafer',  col, label, df, run_dir)
+        for col, label in METRICS
+    ] + [
+        ('1d',     col, label, df, run_dir)
+        for col, label in METRICS
+    ] + [
+        ('1d_mad', col, label, df, run_dir)
+        for col, label in METRICS
+    ] + [
+        ('trust',  col, label, df, run_dir)
+        for col, label in METRICS
     ]
     with ProcessPoolExecutor(max_workers=None) as ex:
-        futures = [ex.submit(fn, args) for fn, args in tasks]
+        futures = [ex.submit(_run_plot, t) for t in tasks]
         for f in futures:
-            f.result()  # 예외 있으면 여기서 터짐
+            f.result()
     print('        → 모든 플롯 완료')
 
     print('\n' + '=' * 60)
